@@ -1,0 +1,39 @@
+# 数据库文件
+*.db
+*.db-wal
+*.db-shm
+
+# 输出目录
+output/
+debug_steps/
+
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE配置
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 临时测试文件
+test_*.py
+
+# 敏感配置文件（包含API密钥、账号密码等）
+configs/system.yaml
+configs/accounts.yaml
+
+# 日志文件
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 配置文件（如果有敏感配置的话，这里暂时保留，用户可以根据需要调整）
+# config/local.yaml
+# *.env

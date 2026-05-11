@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小红书多设备自动化运营系统 - 监控面板</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+        .header {
+            background: #fe2c55;
+            color: white;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header h1 { font-size: 24px; }
+        .header p { opacity: 0.8; font-size: 14px; margin-top: 5px; }
+
+        .container {
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .stat-card .label { color: #666; font-size: 14px; }
+        .stat-card .value { font-size: 32px; font-weight: bold; color: #fe2c55; margin-top: 5px; }
+
+        .section {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .section h2 {
+            font-size: 18px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .device-list, .task-list {
+            list-style: none;
+        }
+        .device-item, .task-item {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .device-item:last-child, .task-item:last-child { border-bottom: none; }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status-online { background: #e6f7e6; color: #52c41a; }
+        .status-offline { background: #f5f5f5; color: #999; }
+        .status-running { background: #e6f7ff; color: #1890ff; }
+        .status-error { background: #fff1e6; color: #fa8c16; }
+
+        .alert-banner {
+            background: #fff1e6;
+            border: 1px solid #fe2c55;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .alert-banner h3 { color: #fe2c55; margin-bottom: 10px; }
+
+        .btn {
+            background: #fe2c55;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .btn:hover { opacity: 0.9; }
+
+        .refresh-info {
+            text-align: right;
+            color: #999;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>小红书多设备自动化运营系统</h1>
+        <p>监控面板 - 实时状态</p>
+    </div>
+
+    <div class="container">
+        <div id="alert-section" style="display: none;" class="alert-banner">
+            <h3>需要人工介入</h3>
+            <p id="alert-message"></p>
+            <button class="btn" onclick="resolveAlert()">已处理完毕，继续执行</button>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="label">总设备数</div>
+                <div class="value" id="stat-total-devices">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">在线设备</div>
+                <div class="value" id="stat-online-devices">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">任务进度</div>
+                <div class="value" id="stat-progress">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">待处理任务</div>
+                <div class="value" id="stat-pending">-</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>设备状态</h2>
+            <ul class="device-list" id="device-list">
+                <li>加载中...</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>任务列表</h2>
+            <ul class="task-list" id="task-list">
+                <li>加载中...</li>
+            </ul>
+        </div>
+
+        <div class="refresh-info">
+            最后更新: <span id="last-update">-</span>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = protocol + '//' + window.location.host + '/ws';
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.type === 'snapshot') {
+                    updateDashboard(data.data);
+                } else if (data.type === 'status_update') {
+                    // Update single device
+                    updateDeviceStatus(data.data);
+                }
+            };
+
+            ws.onclose = function() {
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+
+        function updateDashboard(data) {
+            document.getElementById('stat-total-devices').textContent = data.device_count || 0;
+            document.getElementById('stat-online-devices').textContent = data.online_devices || 0;
+
+            const stats = data.task_stats || {};
+            const completed = stats.completed || 0;
+            const total = stats.total || 0;
+            document.getElementById('stat-progress').textContent =
+                total > 0 ? `${completed}/${total}` : '0/0';
+            document.getElementById('stat-pending').textContent = data.pending_tasks?.length || 0;
+
+            updateDeviceList(data.online_devices || []);
+            updateTaskList(data.pending_tasks || []);
+
+            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+        }
+
+        function updateDeviceList(devices) {
+            const list = document.getElementById('device-list');
+            if (!devices || devices.length === 0) {
+                list.innerHTML = '<li class="device-item">暂无在线设备</li>';
+                return;
+            }
+
+            list.innerHTML = devices.map(d => `
+                <li class="device-item">
+                    <span class="status-badge status-${d.status}">${d.status}</span>
+                    <span style="margin-left: 10px;">${d.device_id}</span>
+                    <span style="margin-left: 10px; color: #999;">${d.device_name || ''}</span>
+                </li>
+            `).join('');
+        }
+
+        function updateTaskList(tasks) {
+            const list = document.getElementById('task-list');
+            if (!tasks || tasks.length === 0) {
+                list.innerHTML = '<li class="task-item">暂无任务</li>';
+                return;
+            }
+
+            list.innerHTML = tasks.slice(0, 10).map(t => `
+                <li class="task-item">
+                    <span>${t.target_nickname || t.target_user_id}</span>
+                    <span style="margin-left: auto; color: #999;">${t.status}</span>
+                </li>
+            `).join('');
+        }
+
+        function updateDeviceStatus(data) {
+            // Handle single device update
+            console.log('Device status update:', data);
+        }
+
+        function resolveAlert() {
+            fetch('/api/alerts/resolve', { method: 'POST' })
+                .then(r => r.json())
+                .then(d => {
+                    if (d.success) {
+                        document.getElementById('alert-section').style.display = 'none';
+                    }
+                });
+        }
+
+        // Initial load
+        fetch('/api/stats')
+            .then(r => r.json())
+            .then(updateDashboard);
+
+        // Start WebSocket
+        connectWebSocket();
+
+        // Poll for alerts
+        setInterval(() => {
+            fetch('/api/alerts')
+                .then(r => r.json())
+                .then(data => {
+                    const alerts = data.alerts || {};
+                    if (Object.keys(alerts).length > 0) {
+                        document.getElementById('alert-section').style.display = 'block';
+                        document.getElementById('alert-message').textContent =
+                            '设备 ' + Object.keys(alerts).join(', ') + ' 需要人工处理';
+                    }
+                });
+        }, 5000);
+    </script>
+</body>
+</html>

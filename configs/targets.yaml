@@ -1,0 +1,54 @@
+# Target users configuration
+target_users:
+  - xiaohongshu_id: null
+    nickname: "小心依依"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "霉展堂"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "🌛"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "之芃Eve"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "魔都妈妈六如君"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "洛洛小宝贝"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "添添和妈妈"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "晓蘑蘑"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "采姑娘的小蘑菇"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "16少爷成长记"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "哈喽嘟嘟"
+    match_mode: "fuzzy"
+
+  - xiaohongshu_id: null
+    nickname: "豪豪"
+    match_mode: "fuzzy"
+    
+  - xiaohongshu_id: null
+    nickname: "清清妈妈爱分享"
+    match_mode: "fuzzy"
+# Add more target users as needed
