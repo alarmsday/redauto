@@ -122,18 +122,46 @@ class XiaohongshuWorkflow:
 
                 await self._save_discovery_screenshot()
 
-                # 测试模式：随机滑动后进入随机帖子
+                # 测试模式：OCR识别昵称，20%概率随机进入一个帖子
                 if self.test_mode:
                     await self._random_scroll()
                     await asyncio.sleep(random.uniform(1, 2))
-                    is_video = random.random() < 0.5
-                    post_type = "视频" if is_video else "图文"
-                    print(f"[Workflow] 测试模式：进入随机{post_type}帖子")
-                    target_info = {
-                        'is_video': is_video,
-                        'post_id': f'post_test_{random.randint(1000, 9999)}',
-                    }
-                    consecutive_no_target = 0
+
+                    # OCR扫描识别昵称候选
+                    ctrl = self._get_controller()
+                    screenshot_bytes = ctrl.take_screenshot()
+                    img = Image.open(io.BytesIO(screenshot_bytes))
+                    img_np = np.array(img)
+                    h, w = img_np.shape[:2]
+                    content_region = img_np[int(h*0.08):int(h*0.85), :]
+
+                    reader = self._get_ocr_reader()
+                    candidates = []
+                    if reader is not None:
+                        results = reader.readtext(content_region, detail=1)
+                        for (bbox, text, conf) in results:
+                            # 昵称特征：2-10字符，置信度>0.5，在帖子卡片区域
+                            if 2 <= len(text) <= 10 and conf > 0.5:
+                                abs_y = [int(p[1]) + int(h*0.08) for p in bbox]
+                                y_pos = sum(abs_y) // len(abs_y)
+                                if int(h*0.15) < y_pos < int(h*0.75):
+                                    x_center = sum([int(p[0]) for p in bbox]) // 4
+                                    candidates.append((text, x_center, y_pos, conf))
+
+                    print(f"[Workflow] 测试模式：OCR识别到 {len(candidates)} 个昵称候选")
+
+                    # 20%概率进入一个帖子
+                    if random.random() < 0.2 and candidates:
+                        target_name, tx, ty, tconf = random.choice(candidates)
+                        ctrl.click(tx, ty)
+                        await asyncio.sleep(3)
+                        print(f"[Workflow] 测试模式：进入帖子 '{target_name}' ({tx}, {ty}, 置信度 {tconf:.2f})")
+                        target_info = {'nickname': target_name, 'x': tx, 'y': ty, 'is_video': False}
+                        consecutive_no_target = 0
+                    else:
+                        print(f"[Workflow] 测试模式：跳过本次进入（概率20%或无候选）")
+                        target_info = None
+                        continue
                 else:
                     # 生产模式：先扫描当前页，最多滑动2次
                     target_info = None
@@ -173,8 +201,9 @@ class XiaohongshuWorkflow:
                         await asyncio.sleep(random.uniform(1.5, 2.5))
                         continue
 
-                # 进入帖子
-                await self._enter_post(target_info)
+                # 进入帖子（测试模式已在上方点击进入，跳过重复点击）
+                if not self.test_mode:
+                    await self._enter_post(target_info)
 
                 # 浏览帖子（自动识别视频/图文）
                 await self._browse_post()
@@ -276,31 +305,40 @@ class XiaohongshuWorkflow:
             print(f"[Workflow] 页面检测异常: {e}")
             return False
 
-    async def _ensure_discovery_page(self):
-        """确保在发现页 - 重启APP确保进入正确的页面"""
+    async def _ensure_discovery_page(self, force_restart=False):
+        """确保在发现页 - 优先点击发现Tab，重启APP作为最后手段"""
         ctrl = self._get_controller()
 
-        # 重启小红书，确保从发现页启动
-        print("[Workflow] 重启APP确保在发现页...")
-        ctrl.restart_xiaohongshu()
-        await asyncio.sleep(5)
+        if force_restart:
+            print("[Workflow] 强制重启APP确保在发现页...")
+            ctrl.restart_xiaohongshu()
+            await asyncio.sleep(5)
+            for i in range(5):
+                screenshot = ctrl.take_screenshot()
+                if screenshot and len(screenshot) > 10000:
+                    print(f"[Workflow] APP加载成功 (尝试 {i+1} 次)")
+                    break
+                await asyncio.sleep(1)
 
-        # 验证APP加载
-        for i in range(5):
-            screenshot = ctrl.take_screenshot()
-            if screenshot and len(screenshot) > 10000:
-                print(f"[Workflow] APP加载成功 (尝试 {i+1} 次)")
-                break
-            await asyncio.sleep(1)
-
-        # 验证是否在发现页，如果不在，尝试点击"发现"Tab
+        # 检查是否在发现页
         if not await self._is_on_discovery_page():
-            print("[Workflow] 重启后不在发现页，尝试点击发现Tab...")
+            print("[Workflow] 不在发现页，尝试点击发现Tab...")
             try:
                 self._click_discovery_tab()
                 await asyncio.sleep(2)
             except Exception as e:
                 print(f"[Workflow] 点击发现Tab失败: {e}")
+
+        # 仍不在发现页，强制重启
+        if not await self._is_on_discovery_page():
+            print("[Workflow] 点击Tab无效，强制重启APP...")
+            ctrl.restart_xiaohongshu()
+            await asyncio.sleep(5)
+            for i in range(5):
+                screenshot = ctrl.take_screenshot()
+                if screenshot and len(screenshot) > 10000:
+                    break
+                await asyncio.sleep(1)
 
     def _click_discovery_tab(self):
         """点击顶部"发现"Tab - 通过OCR定位"""
@@ -405,35 +443,49 @@ class XiaohongshuWorkflow:
         content_region = img_np[content_y_start:content_y_end, :]
 
         reader = self._get_ocr_reader()
-        if reader is not None:
-            results = reader.readtext(content_region, detail=1)
-            target_users = self._get_target_users()
+        if reader is None:
+            print("[Workflow] OCR: EasyOCR未加载")
+            return None
 
-            for target in target_users:
-                # 跳过纯emoji昵称（OCR无法识别emoji）
-                nick_text = target.nickname.strip()
-                is_emoji_only = all(
-                    unicodedata.category(c)[0] == 'So' for c in nick_text
-                ) if nick_text else True
-                if is_emoji_only:
+        print("[Workflow] OCR: 开始扫描发现页...")
+        results = reader.readtext(content_region, detail=1)
+        print(f"[Workflow] OCR: 识别到 {len(results)} 段文字")
+        # 打印所有识别到的文字（调试用）
+        for _, text, conf in results:
+            if conf > 0.3:
+                print(f"  [{conf:.2f}] {text}")
+
+        target_users = self._get_target_users()
+        print(f"[Workflow] OCR: 目标用户 {len(target_users)} 个")
+
+        for target in target_users:
+            # 跳过纯emoji昵称（OCR无法识别emoji）
+            nick_text = target.nickname.strip()
+            is_emoji_only = all(
+                unicodedata.category(c)[0] == 'So' for c in nick_text
+            ) if nick_text else True
+            if is_emoji_only:
+                print(f"[Workflow] OCR: 跳过纯emoji昵称 '{nick_text}'")
+                continue
+
+            for (bbox, text, conf) in results:
+                if conf < 0.3:
                     continue
+                # 使用target_detector的匹配逻辑
+                from workflow.target_detector import _match_nickname
+                if _match_nickname(target.nickname, text, target.match_mode):
+                    abs_y = [int(p[1]) + content_y_start for p in bbox]
+                    y_pos = sum(abs_y) // len(abs_y)
+                    x_center = sum([int(p[0]) for p in bbox]) // 4
+                    print(f"[Workflow] OCR找到目标用户: '{text}' -> '{target.nickname}' ({x_center}, {y_pos})")
+                    return {
+                        'nickname': target.nickname,
+                        'x': x_center,
+                        'y': y_pos,
+                        'is_video': False,
+                    }
 
-                for (bbox, text, conf) in results:
-                    if conf < 0.3:
-                        continue
-                    # 使用target_detector的匹配逻辑
-                    from workflow.target_detector import _match_nickname
-                    if _match_nickname(target.nickname, text, target.match_mode):
-                        abs_y = [int(p[1]) + content_y_start for p in bbox]
-                        y_pos = sum(abs_y) // len(abs_y)
-                        x_center = sum([int(p[0]) for p in bbox]) // 4
-                        print(f"[Workflow] OCR找到目标用户: '{text}' -> '{target.nickname}' ({x_center}, {y_pos})")
-                        return {
-                            'nickname': target.nickname,
-                            'x': x_center,
-                            'y': y_pos,
-                            'is_video': False,
-                        }
+        print("[Workflow] OCR: 未匹配到目标用户")
         return None
 
     async def _click_user_nickname(self, target_name: str = None):
@@ -901,10 +953,14 @@ class XiaohongshuWorkflow:
         ctrl.press_back()
         await asyncio.sleep(2)
 
-        # 纠错：确保返回后在发现页
+        # 尝试检测是否在发现页，失败不强制重启
         if not await self._is_on_discovery_page():
-            print("[Workflow] 返回后不在发现页，执行纠错...")
-            await self._ensure_discovery_page()
+            print("[Workflow] 返回后未检测到发现页，尝试点击发现Tab...")
+            try:
+                self._click_discovery_tab()
+                await asyncio.sleep(2)
+            except Exception as e:
+                print(f"[Workflow] 点击发现Tab失败: {e}")
 
     async def _random_scroll(self):
         """随机下滑（浏览新内容）"""

@@ -50,8 +50,6 @@ async def local_ocr_text(screenshot: bytes) -> List[str]:
     try:
         import numpy as np
         import cv2
-        import tempfile
-        import os
 
         # 将bytes转为numpy数组
         nparr = np.frombuffer(screenshot, np.uint8)
@@ -60,25 +58,17 @@ async def local_ocr_text(screenshot: bytes) -> List[str]:
         if img is None:
             return []
 
-        # 保存为临时文件
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as f:
-            temp_path = f.name
+        # 直接传numpy数组，不需要临时文件
+        results = _ocr_engine.readtext(img)
 
-        try:
-            cv2.imwrite(temp_path, img)
-            results = _ocr_engine.readtext(temp_path)
+        texts = []
+        for bbox, text, confidence in results:
+            if text and confidence > 0.3:
+                texts.append(text)
 
-            texts = []
-            for bbox, text, confidence in results:
-                if text and confidence > 0.3:
-                    texts.append(text)
-
-            if texts:
-                print(f"[目标识别] EasyOCR 识别到 {len(texts)} 段文字")
-            return texts
-        finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+        if texts:
+            print(f"[目标识别] EasyOCR 识别到 {len(texts)} 段文字")
+        return texts
 
     except Exception as e:
         print(f"[目标识别] EasyOCR 识别失败: {e}")
