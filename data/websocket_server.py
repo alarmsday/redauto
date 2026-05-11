@@ -11,7 +11,7 @@ import threading
 class StatusPushServer:
     """WebSocket状态推送服务器"""
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8080):
+    def __init__(self, host: str = "127.0.0.1", port: int = 8765):
         self.host = host
         self.port = port
         self.subscribers: Set[web.WebSocketResponse] = set()

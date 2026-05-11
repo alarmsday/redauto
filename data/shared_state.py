@@ -233,7 +233,7 @@ def get_online_devices() -> List[Dict[str, Any]]:
     db = get_db()
     with db.get_cursor() as cursor:
         cursor.execute(
-            "SELECT * FROM device_status WHERE last_heartbeat > datetime('now', '-30 seconds')"
+            "SELECT * FROM device_status WHERE status IN ('online', 'running')"
         )
         return [dict(row) for row in cursor.fetchall()]
 

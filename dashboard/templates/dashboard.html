@@ -56,16 +56,16 @@
             border-bottom: 1px solid #eee;
         }
 
-        .device-list, .task-list {
+        .device-list {
             list-style: none;
         }
-        .device-item, .task-item {
+        .device-item {
             display: flex;
             align-items: center;
             padding: 12px;
             border-bottom: 1px solid #f0f0f0;
         }
-        .device-item:last-child, .task-item:last-child { border-bottom: none; }
+        .device-item:last-child { border-bottom: none; }
 
         .status-badge {
             display: inline-block;
@@ -79,15 +79,6 @@
         .status-running { background: #e6f7ff; color: #1890ff; }
         .status-error { background: #fff1e6; color: #fa8c16; }
 
-        .alert-banner {
-            background: #fff1e6;
-            border: 1px solid #fe2c55;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 20px;
-        }
-        .alert-banner h3 { color: #fe2c55; margin-bottom: 10px; }
-
         .btn {
             background: #fe2c55;
             color: white;
@@ -97,6 +88,52 @@
             cursor: pointer;
         }
         .btn:hover { opacity: 0.9; }
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 12px;
+            border-radius: 3px;
+        }
+        .btn-test { background: #1890ff; }
+        .btn-run { background: #52c41a; }
+        .btn-stop { background: #ff4d4f; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .workflow-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 500;
+            margin-left: 8px;
+        }
+        .wf-test { background: #e6f7ff; color: #1890ff; }
+        .wf-run { background: #e6f7e6; color: #52c41a; }
+
+        .log-section {
+            margin-top: 8px;
+            background: #1e1e1e;
+            border-radius: 4px;
+            padding: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: #d4d4d4;
+            line-height: 1.4;
+        }
+        .log-section::-webkit-scrollbar { width: 6px; }
+        .log-section::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+        .log-section .log-line { white-space: pre-wrap; word-break: break-all; }
+        .log-section .log-line:last-child { color: #569cd6; }
+
+        .log-toggle {
+            color: #1890ff;
+            font-size: 12px;
+            cursor: pointer;
+            margin-left: 10px;
+            user-select: none;
+        }
+        .log-toggle:hover { text-decoration: underline; }
 
         .refresh-info {
             text-align: right;
@@ -113,12 +150,6 @@
     </div>
 
     <div class="container">
-        <div id="alert-section" style="display: none;" class="alert-banner">
-            <h3>需要人工介入</h3>
-            <p id="alert-message"></p>
-            <button class="btn" onclick="resolveAlert()">已处理完毕，继续执行</button>
-        </div>
-
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="label">总设备数</div>
@@ -129,12 +160,8 @@
                 <div class="value" id="stat-online-devices">-</div>
             </div>
             <div class="stat-card">
-                <div class="label">任务进度</div>
-                <div class="value" id="stat-progress">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">待处理任务</div>
-                <div class="value" id="stat-pending">-</div>
+                <div class="label">运行中</div>
+                <div class="value" id="stat-running">-</div>
             </div>
         </div>
 
@@ -145,103 +172,187 @@
             </ul>
         </div>
 
-        <div class="section">
-            <h2>任务列表</h2>
-            <ul class="task-list" id="task-list">
-                <li>加载中...</li>
-            </ul>
-        </div>
-
         <div class="refresh-info">
             最后更新: <span id="last-update">-</span>
         </div>
     </div>
 
     <script>
-        let ws = null;
-
-        function connectWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = protocol + '//' + window.location.host + '/ws';
-
-            ws = new WebSocket(wsUrl);
-
-            ws.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                if (data.type === 'snapshot') {
-                    updateDashboard(data.data);
-                } else if (data.type === 'status_update') {
-                    // Update single device
-                    updateDeviceStatus(data.data);
-                }
-            };
-
-            ws.onclose = function() {
-                setTimeout(connectWebSocket, 3000);
-            };
-        }
+        let logRefreshIntervals = {};
+        let openLogs = new Set();
 
         function updateDashboard(data) {
-            document.getElementById('stat-total-devices').textContent = data.device_count || 0;
-            document.getElementById('stat-online-devices').textContent = data.online_devices || 0;
-
-            const stats = data.task_stats || {};
-            const completed = stats.completed || 0;
-            const total = stats.total || 0;
-            document.getElementById('stat-progress').textContent =
-                total > 0 ? `${completed}/${total}` : '0/0';
-            document.getElementById('stat-pending').textContent = data.pending_tasks?.length || 0;
-
-            updateDeviceList(data.online_devices || []);
-            updateTaskList(data.pending_tasks || []);
-
+            const devices = data.devices || {};
+            document.getElementById('stat-total-devices').textContent = devices.total || 0;
+            document.getElementById('stat-online-devices').textContent = devices.online || 0;
             document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+            fetch('/api/devices')
+                .then(r => r.json())
+                .then(data => {
+                    updateDeviceList(data.devices || []);
+                });
         }
 
         function updateDeviceList(devices) {
-            const list = document.getElementById('device-list');
-            if (!devices || devices.length === 0) {
-                list.innerHTML = '<li class="device-item">暂无在线设备</li>';
-                return;
-            }
-
-            list.innerHTML = devices.map(d => `
-                <li class="device-item">
-                    <span class="status-badge status-${d.status}">${d.status}</span>
-                    <span style="margin-left: 10px;">${d.device_id}</span>
-                    <span style="margin-left: 10px; color: #999;">${d.device_name || ''}</span>
-                </li>
-            `).join('');
-        }
-
-        function updateTaskList(tasks) {
-            const list = document.getElementById('task-list');
-            if (!tasks || tasks.length === 0) {
-                list.innerHTML = '<li class="task-item">暂无任务</li>';
-                return;
-            }
-
-            list.innerHTML = tasks.slice(0, 10).map(t => `
-                <li class="task-item">
-                    <span>${t.target_nickname || t.target_user_id}</span>
-                    <span style="margin-left: auto; color: #999;">${t.status}</span>
-                </li>
-            `).join('');
-        }
-
-        function updateDeviceStatus(data) {
-            // Handle single device update
-            console.log('Device status update:', data);
-        }
-
-        function resolveAlert() {
-            fetch('/api/alerts/resolve', { method: 'POST' })
+            fetch('/api/workflows')
                 .then(r => r.json())
-                .then(d => {
-                    if (d.success) {
-                        document.getElementById('alert-section').style.display = 'none';
+                .then(wfData => {
+                    const workflows = wfData.workflows || {};
+                    // 更新运行中数量
+                    document.getElementById('stat-running').textContent = Object.keys(workflows).length;
+
+                    const list = document.getElementById('device-list');
+                    if (!devices || devices.length === 0) {
+                        list.innerHTML = '<li class="device-item">暂无设备数据</li>';
+                        return;
+                    }
+
+                    list.innerHTML = devices.map(d => {
+                        const statusClass = d.status === 'online' ? 'status-online' :
+                                            d.status === 'running' ? 'status-running' :
+                                            d.status === 'error' ? 'status-error' : 'status-offline';
+                        const hb = d.last_heartbeat ? new Date(d.last_heartbeat).toLocaleTimeString() : '-';
+                        const isRunning = workflows[d.device_id];
+                        const isOnline = d.status === 'online' || d.status === 'running';
+
+                        let wfBadge = '';
+                        let controls = '';
+                        let logSection = '';
+
+                        if (isRunning) {
+                            const modeLabel = isRunning.test_mode ? '测试' : '正式';
+                            const modeClass = isRunning.test_mode ? 'wf-test' : 'wf-run';
+                            wfBadge = `<span class="workflow-badge ${modeClass}">${modeLabel}模式</span>`;
+                            controls = `<button class="btn btn-sm btn-stop" onclick="stopWorkflow('${d.device_id}')">停止</button>`;
+                            logSection = `
+                                <div class="log-section" id="log-${d.device_id}" style="display:${openLogs.has(d.device_id) ? 'block' : 'none'}; margin-top: 8px; background: #1e1e1e; border-radius: 4px; padding: 8px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; color: #d4d4d4;">
+                                    <div>等待加载日志...</div>
+                                </div>
+                            `;
+                        } else {
+                            controls = `
+                                <button class="btn btn-sm btn-test" onclick="startWorkflow('${d.device_id}', true)" ${!isOnline ? 'disabled' : ''}>测试</button>
+                                <button class="btn btn-sm btn-run" onclick="startWorkflow('${d.device_id}', false)" ${!isOnline ? 'disabled' : ''}>正式</button>
+                            `;
+                        }
+
+                        return `
+                            <li class="device-item" style="flex-wrap: wrap;">
+                                <span class="status-badge ${statusClass}">${d.status}</span>
+                                <span style="margin-left: 10px; font-weight: 500;">${d.device_id}</span>
+                                ${wfBadge}
+                                <span style="margin-left: auto; color: #999; font-size: 13px;">${hb}</span>
+                                <span style="margin-left: 10px; display: flex; gap: 6px;">
+                                    ${controls}
+                                </span>
+                                ${isRunning ? `<span class="log-toggle" onclick="toggleLogs('${d.device_id}')">${openLogs.has(d.device_id) ? '隐藏日志' : '查看日志'}</span>` : ''}
+                                ${logSection}
+                            </li>
+                        `;
+                    }).join('');
+
+                    // 日志刷新
+                    for (const did in workflows) {
+                        if (!logRefreshIntervals[did]) {
+                            logRefreshIntervals[did] = setInterval(() => refreshLogs(did), 2000);
+                        }
+                    }
+                    for (const did in logRefreshIntervals) {
+                        if (!workflows[did]) {
+                            clearInterval(logRefreshIntervals[did]);
+                            delete logRefreshIntervals[did];
+                            openLogs.delete(did);
+                        }
+                    }
+                    for (const did of openLogs) {
+                        refreshLogs(did);
                     }
                 });
+        }
+
+        function toggleLogs(deviceId) {
+            if (openLogs.has(deviceId)) {
+                openLogs.delete(deviceId);
+            } else {
+                openLogs.add(deviceId);
+            }
+            refreshDeviceList();
+        }
+
+        function refreshDeviceList() {
+            fetch('/api/devices')
+                .then(r => r.json())
+                .then(data => {
+                    updateDeviceList(data.devices || []);
+                });
+        }
+
+        function refreshLogs(deviceId) {
+            const logEl = document.getElementById('log-' + deviceId);
+            if (!logEl || logEl.style.display === 'none') return;
+
+            fetch(`/api/devices/${deviceId}/logs`)
+                .then(r => r.json())
+                .then(data => {
+                    const logs = data.logs || [];
+                    if (logs.length === 0) {
+                        logEl.innerHTML = '<div>暂无日志输出</div>';
+                    } else {
+                        logEl.innerHTML = logs.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join('');
+                        logEl.scrollTop = logEl.scrollHeight;
+                    }
+                })
+                .catch(() => {});
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function startWorkflow(deviceId, testMode) {
+            const modeLabel = testMode ? '测试模式' : '正式模式';
+            if (!confirm(`确认在 ${modeLabel} 下启动设备 ${deviceId}？`)) return;
+
+            fetch(`/api/devices/${deviceId}/start`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({test_mode: testMode})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    refreshData();
+                } else {
+                    alert('启动失败: ' + (data.error || '未知错误'));
+                }
+            })
+            .catch(e => alert('请求失败: ' + e.message));
+        }
+
+        function stopWorkflow(deviceId) {
+            if (!confirm(`确认停止设备 ${deviceId} 的工作流？`)) return;
+
+            fetch(`/api/devices/${deviceId}/stop`, {method: 'POST'})
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    refreshData();
+                } else {
+                    alert('停止失败: ' + (data.error || '未知错误'));
+                }
+            })
+            .catch(e => alert('请求失败: ' + e.message));
+        }
+
+        function refreshData() {
+            fetch('/api/stats')
+                .then(r => r.json())
+                .then(updateDashboard);
         }
 
         // Initial load
@@ -249,22 +360,8 @@
             .then(r => r.json())
             .then(updateDashboard);
 
-        // Start WebSocket
-        connectWebSocket();
-
-        // Poll for alerts
-        setInterval(() => {
-            fetch('/api/alerts')
-                .then(r => r.json())
-                .then(data => {
-                    const alerts = data.alerts || {};
-                    if (Object.keys(alerts).length > 0) {
-                        document.getElementById('alert-section').style.display = 'block';
-                        document.getElementById('alert-message').textContent =
-                            '设备 ' + Object.keys(alerts).join(', ') + ' 需要人工处理';
-                    }
-                });
-        }, 5000);
+        // Poll for updates every 5 seconds
+        setInterval(refreshData, 5000);
     </script>
 </body>
 </html>

@@ -8,8 +8,6 @@ import base64
 import tempfile
 from typing import Optional, Tuple, Dict, Any, List
 from dataclasses import dataclass
-from PIL import Image
-import numpy as np
 
 # AirTest imports
 from airtest.core.api import (
@@ -59,7 +57,7 @@ class DeviceController:
             # cap_method: javacap (Java screenshot) or minicap
             # touch_method: adb (ADB tap) or minitouch
             self._device = connect_device(
-                f"Android:///{self.device_id}?cap_method=javacap&touch_method=adb"
+                f"Android:///{self.device_id}?cap_method=ADB_CAP&touch_method=adb"
             )
             self._connected = True
 
@@ -110,28 +108,42 @@ class DeviceController:
 
     def take_screenshot(self) -> bytes:
         """
-        Take screenshot and return as PNG bytes
+        Take screenshot using adb screencap -> file -> pull.
 
-        Returns:
-            PNG image bytes, or empty bytes on failure
+        stdout capture on Windows corrupts binary data (\r\n issues),
+        so we save to device first then pull.
         """
         if not self.is_connected():
             return b""
 
         try:
-            # snapshot() returns numpy array
-            img_array = self._device.snapshot()
-            if img_array is None:
-                return b""
+            import subprocess
+            import tempfile
+            adb_path = self._device.adb.adb_path
 
-            # Convert to PIL Image
-            img = Image.fromarray(img_array)
+            # Write screenshot to temp file on device
+            self._device.adb.shell("screencap -p /sdcard/screen_cap.png")
 
-            # Save to bytes
-            buffer = io.BytesIO()
-            img.save(buffer, format='PNG')
-            return buffer.getvalue()
+            # Pull to local temp file
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                tmp_path = tmp.name
 
+            subprocess.run(
+                [adb_path, '-s', self.device_id, 'pull', '/sdcard/screen_cap.png', tmp_path],
+                check=True, capture_output=True, timeout=10
+            )
+
+            with open(tmp_path, 'rb') as f:
+                data = f.read()
+
+            # Clean up
+            import os
+            os.unlink(tmp_path)
+            self._device.adb.shell("rm /sdcard/screen_cap.png")
+
+            if len(data) > 0 and data[:4] == b'\x89PNG':
+                return data
+            return b""
         except Exception as e:
             print(f"[DeviceController] Screenshot failed: {e}")
             return b""
